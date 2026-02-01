@@ -6,3 +6,6 @@ lxml>=5.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
+
+# Agent (browser-based menu finder - fallback)
+playwright>=1.40.0

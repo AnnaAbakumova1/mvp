@@ -35,7 +35,8 @@ class SiteFinder:
         
         Strategy:
         1. Try 2GIS web page for the restaurant
-        2. If not found and Yandex search enabled, try Yandex
+        2. Try guessing URL from restaurant name
+        3. If not found and Yandex search enabled, try Yandex
         
         Args:
             restaurant: Restaurant object with id and name
@@ -43,13 +44,14 @@ class SiteFinder:
         Returns:
             Website URL or None
         """
-        # Strategy 1: 2GIS web page
+        # Strategy 1: 2GIS web page (already checks name match)
         website = await self._find_on_2gis(restaurant)
         if website:
             logger.info(f"Found website via 2GIS: {website}")
             return website
         
         # Strategy 2: Yandex search (fallback, if enabled)
+        # NOTE: _guess_website_url disabled - too slow (40s+ per restaurant with failed guesses)
         if settings.enable_yandex_search:
             website = await self._find_via_yandex(restaurant)
             if website:
@@ -64,6 +66,7 @@ class SiteFinder:
         Parse 2GIS web page to find restaurant website.
         
         The website link is typically in the contact section of the firm page.
+        Checks that the URL matches the restaurant name.
         """
         url = TWOGIS_FIRM_URL.format(firm_id=restaurant.id)
         
@@ -76,33 +79,62 @@ class SiteFinder:
         try:
             soup = BeautifulSoup(html, "lxml")
             
-            # Look for website links in various possible locations
-            # Pattern 1: Link with specific class or data attribute
-            website_patterns = [
-                # Links containing "website" in class
-                soup.find_all("a", class_=re.compile(r"website|site|url", re.I)),
-                # Links with href starting with http and not 2gis
-                soup.find_all("a", href=re.compile(r"^https?://(?!.*2gis)", re.I)),
-            ]
+            # Collect all potential website links
+            all_links = []
             
-            for links in website_patterns:
-                for link in links:
-                    href = link.get("href", "")
-                    # Filter out social media and irrelevant links
-                    if self._is_valid_website(href):
-                        return href
+            # Pattern 1: Links with specific class
+            all_links.extend(soup.find_all("a", class_=re.compile(r"website|site|url", re.I)))
+            # Pattern 2: All external http links (not 2gis internal)
+            all_links.extend(soup.find_all("a", href=re.compile(r"^https?://", re.I)))
             
-            # Pattern 2: Look for text "Сайт:" followed by URL
+            # Check each link - return first that matches restaurant name
+            for link in all_links:
+                href = link.get("href", "")
+                
+                # Extract real URL from 2GIS tracking links
+                # Format: http://link.2gis.ru/...?http://real-url.ru/path
+                real_url = self._extract_real_url(href)
+                
+                if real_url and self._is_valid_website(real_url) and self._is_likely_restaurant_site(real_url, restaurant.name):
+                    return real_url
+            
+            # Pattern 3: Look for text "Сайт:" followed by URL
             text = soup.get_text()
             site_match = re.search(r"[Сс]айт[:\s]+([a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,})", text)
             if site_match:
                 domain = site_match.group(1)
-                return f"https://{domain}"
+                url = f"https://{domain}"
+                if self._is_likely_restaurant_site(url, restaurant.name):
+                    return url
             
         except Exception as e:
             logger.error(f"Error parsing 2GIS page: {e}")
         
         return None
+    
+    def _extract_real_url(self, url: str) -> Optional[str]:
+        """
+        Extract real URL from 2GIS tracking links.
+        
+        2GIS wraps external links in tracking: http://link.2gis.ru/...?http://real-site.ru/
+        """
+        if not url:
+            return None
+        
+        # Check if it's a 2GIS tracking link
+        if "link.2gis.ru" in url or "link.2gis.com" in url:
+            # Extract real URL from query string
+            # It's usually after the last '?' as: ...?http://real-url
+            parts = url.split("?")
+            if len(parts) > 1:
+                # Get the last part which should contain the real URL
+                real_part = parts[-1]
+                if real_part.startswith("http"):
+                    return real_part
+            return None
+        
+        # Not a tracking link, return as-is
+        return url
     
     async def _find_via_yandex(self, restaurant: Restaurant) -> Optional[str]:
         """
@@ -144,6 +176,62 @@ class SiteFinder:
         
         return None
     
+    async def _guess_website_url(self, restaurant: Restaurant) -> Optional[str]:
+        """
+        Try to guess restaurant website URL from its name.
+        
+        Common patterns:
+        - restaurantname.ru
+        - restaurantnamemsk.ru (for Moscow)
+        - restaurant-name.ru
+        
+        Only works for simple brand names (single word or very short).
+        """
+        # Extract first significant word from name (likely the brand name)
+        name_part = restaurant.name.split(',')[0]  # Take part before comma
+        name_words = []
+        for word in name_part.split():
+            clean_word = ''.join(c for c in word.lower() if c.isalpha())
+            if len(clean_word) >= 2:
+                name_words.append(clean_word)
+        
+        if not name_words:
+            return None
+        
+        # Skip if name has multiple words (too generic, like "City Voice")
+        if len(name_words) > 1:
+            return None
+        
+        # Use first word as likely brand name
+        brand = name_words[0]
+        
+        # Skip very short or common words
+        if len(brand) < 3:
+            return None
+        
+        brand_translit = self._simple_translit(brand)
+        
+        # Try common URL patterns
+        url_patterns = [
+            f"https://{brand_translit}.ru/",
+            f"https://{brand_translit}msk.ru/",
+            f"https://{brand_translit}-msk.ru/",
+            f"https://{brand_translit}moscow.ru/",
+        ]
+        
+        for url in url_patterns:
+            # Quick check if site exists
+            try:
+                html = await http_client.get(url, max_retries=1)
+                if html and len(html) > 500:
+                    # Site exists and has content
+                    logger.debug(f"Guessed website exists: {url}")
+                    return url
+            except Exception:
+                continue
+        
+        return None
+    
     def _is_valid_website(self, url: str) -> bool:
         """Check if URL is a valid restaurant website."""
         if not url or not url.startswith("http"):
@@ -166,6 +254,11 @@ class SiteFinder:
             "zoon.ru",
             "delivery-club.ru",
             "eda.yandex.ru",
+            # Messengers (not real websites)
+            "wa.me",
+            "whatsapp.com",
+            "t.me",
+            "telegram.org",
         ]
         
         url_lower = url.lower()
@@ -175,22 +268,36 @@ class SiteFinder:
         """
         Check if URL is likely the official restaurant website.
         
-        Heuristic: domain contains restaurant name words.
+        Heuristic: domain OR path must contain at least one word from restaurant name.
+        This prevents returning unrelated sites from ads/recommendations.
         """
-        url_lower = url.lower()
+        from urllib.parse import urlparse
         
-        # Extract significant words from restaurant name (3+ chars)
-        name_words = [w.lower() for w in restaurant_name.split() if len(w) >= 3]
+        parsed = urlparse(url)
+        # Check both domain and path (e.g., mavlyutov-rg.ru/muu)
+        url_to_check = (parsed.netloc + parsed.path).lower()
         
-        # Check if any word appears in URL
+        # Extract significant words from restaurant name (3+ chars, letters only)
+        name_words = []
+        for word in restaurant_name.split():
+            # Clean word - keep only letters
+            clean_word = ''.join(c for c in word.lower() if c.isalpha())
+            if len(clean_word) >= 3:
+                name_words.append(clean_word)
+        
+        # Check if any word appears in domain+path
         for word in name_words:
-            # Transliterate common Russian letters for URL matching
+            # Check Russian word directly
+            if word in url_to_check:
+                return True
+            # Transliterate and check
             word_translit = self._simple_translit(word)
-            if word in url_lower or word_translit in url_lower:
+            if word_translit in url_to_check:
                 return True
         
-        # If no match, still accept as it might be an unrelated domain name
-        return True
+        # No match found - reject this URL (will trigger fallback)
+        logger.debug(f"Rejecting {url} - URL doesn't match restaurant '{restaurant_name}'")
+        return False
     
     def _simple_translit(self, text: str) -> str:
         """Simple Russian to Latin transliteration for URL matching."""

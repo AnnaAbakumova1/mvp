@@ -109,14 +109,17 @@ class GeoService:
                 "radius": radius,
                 "rubric_id": rubric_id,
                 "fields": "items.point,items.address",
-                "page_size": min(20, max_results - len(restaurants)),
+                "page_size": min(10, max_results - len(restaurants)),  # Максимум 10 по требованиям API
             }
             
-            logger.debug(f"Searching restaurants with rubric {rubric_id}")
+            logger.info(f"[DEBUG] Запрос к 2GIS: rubric={rubric_id}, point={params['point']}, radius={radius}")
             
             data = await http_client.get_json(TWOGIS_CATALOG_URL, params=params)
             
+            logger.info(f"[DEBUG] Ответ 2GIS: {data}")
+            
             if not data:
+                logger.warning(f"[DEBUG] Нет данных от 2GIS для rubric_id={rubric_id}")
                 continue
             
             items = data.get("result", {}).get("items", [])

@@ -15,15 +15,23 @@ class Settings(BaseSettings):
     twogis_api_key: str = Field(..., env="TWOGIS_API_KEY")
     
     # Search settings
-    default_radius_meters: int = Field(default=1000, env="DEFAULT_RADIUS_METERS")
+    default_radius_meters: int = Field(default=500, env="DEFAULT_RADIUS_METERS")
     max_restaurants_per_search: int = Field(default=20, env="MAX_RESTAURANTS_PER_SEARCH")
-    request_timeout_seconds: int = Field(default=10, env="REQUEST_TIMEOUT_SECONDS")
+    request_timeout_seconds: int = Field(default=20, env="REQUEST_TIMEOUT_SECONDS")
     
     # Rate limiting
     yandex_delay_seconds: float = Field(default=2.0, env="YANDEX_DELAY_SECONDS")
     
     # Yandex search toggle (fallback only)
     enable_yandex_search: bool = Field(default=True, env="ENABLE_YANDEX_SEARCH")
+    
+    # Agent settings (browser-based menu finder)
+    agent_enabled: bool = Field(default=True, env="AGENT_ENABLED")
+    agent_timeout_seconds: int = Field(default=15, env="AGENT_TIMEOUT_SECONDS")
+    agent_max_steps: int = Field(default=3, env="AGENT_MAX_STEPS")
+    
+    # Groq API (free LLM)
+    groq_api_key: str = Field(default="", env="GROQ_API_KEY")
     
     class Config:
         env_file = ".env"
