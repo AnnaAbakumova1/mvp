@@ -48,6 +48,22 @@ async def on_shutdown(bot: Bot) -> None:
     # Close HTTP client session
     await http_client.close()
     
+    # Close browser service (V2)
+    try:
+        from services.browser_service import close_browser
+        await close_browser()
+        logger.info("Browser service closed")
+    except Exception as e:
+        logger.warning(f"Browser cleanup error: {e}")
+    
+    # Stop task queue (V2)
+    try:
+        from services.task_queue import task_queue
+        await task_queue.stop()
+        logger.info("Task queue stopped")
+    except Exception as e:
+        logger.warning(f"Task queue cleanup error: {e}")
+    
     logger.info("Cleanup complete")
 
 
