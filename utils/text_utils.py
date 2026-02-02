@@ -255,57 +255,95 @@ def _get_dish_variants(dish_name: str) -> list:
     """
     Get alternative names/translations for a dish.
     
-    Handles Russian <-> English/Italian translations for common dishes.
+    Generic approach:
+    1. Common Russian-English translations for dish types
+    2. Word order variations (салат зеленый <-> зеленый салат)
+    3. Italian translations for Italian restaurant dishes
     """
     dish_lower = dish_name.lower().strip()
+    dish_words = dish_lower.split()
     
-    # Dictionary of dish name variants
-    dish_variants = {
-        # Salads
-        "зеленый салат": ["green salad", "insalata verde", "салат зеленый", "микс салат", "mix salad", "салат микс", "листовой салат"],
-        "салат цезарь": ["caesar salad", "insalata caesar", "цезарь"],
-        "греческий салат": ["greek salad", "insalata greca", "греческий"],
-        "овощной салат": ["vegetable salad", "insalata di verdure"],
-        
-        # Soups
-        "куриный суп": ["chicken soup", "zuppa di pollo", "суп куриный", "бульон куриный"],
-        "томатный суп": ["tomato soup", "zuppa di pomodoro"],
-        "грибной суп": ["mushroom soup", "zuppa di funghi"],
-        
-        # Main dishes
-        "паста карбонара": ["carbonara", "pasta carbonara", "карбонара"],
-        "пицца маргарита": ["margherita", "pizza margherita", "маргарита"],
-        "стейк": ["steak", "bistecca"],
-        
-        # Common patterns
+    variants = []
+    
+    # Word order variation (for 2-word dishes)
+    if len(dish_words) == 2:
+        variants.append(f"{dish_words[1]} {dish_words[0]}")
+    
+    # Common translations dictionary (type -> translations)
+    translations = {
+        # Dish types
         "салат": ["salad", "insalata"],
         "суп": ["soup", "zuppa", "brodo"],
         "пицца": ["pizza"],
         "паста": ["pasta"],
+        "стейк": ["steak", "bistecca"],
+        "рыба": ["fish", "pesce"],
+        "мясо": ["meat", "carne"],
+        "курица": ["chicken", "pollo"],
+        "говядина": ["beef", "manzo"],
+        "свинина": ["pork", "maiale"],
+        "десерт": ["dessert", "dolce"],
+        "напиток": ["drink", "bevanda"],
+        
+        # Adjectives
+        "зеленый": ["green", "verde"],
+        "красный": ["red", "rosso"],
+        "белый": ["white", "bianco"],
+        "куриный": ["chicken", "pollo", "di pollo"],
+        "мясной": ["meat", "carne", "di carne"],
+        "рыбный": ["fish", "pesce", "di pesce"],
+        "овощной": ["vegetable", "verdure", "di verdure"],
+        "грибной": ["mushroom", "funghi", "ai funghi"],
+        "томатный": ["tomato", "pomodoro", "al pomodoro"],
+        "сырный": ["cheese", "formaggio"],
+        "греческий": ["greek", "greco", "greca"],
+        "итальянский": ["italian", "italiano", "italiana"],
+        
+        # Specific dishes
+        "цезарь": ["caesar", "cesare"],
+        "карбонара": ["carbonara"],
+        "маргарита": ["margherita", "margarita"],
+        "пепперони": ["pepperoni", "diavola"],
+        "тирамису": ["tiramisu"],
+        "капрезе": ["caprese"],
+        "минестроне": ["minestrone"],
+        "ризотто": ["risotto"],
+        "лазанья": ["lasagna", "lasagne"],
+        "равиоли": ["ravioli"],
+        "феттучини": ["fettuccine", "fettucine"],
+        "спагетти": ["spaghetti"],
+        "пенне": ["penne"],
+        "ньокки": ["gnocchi"],
     }
     
-    variants = []
+    # Generate variants by translating each word
+    for word in dish_words:
+        if word in translations:
+            for trans in translations[word]:
+                # Replace word with translation
+                new_dish = dish_lower.replace(word, trans)
+                if new_dish != dish_lower:
+                    variants.append(new_dish)
+                # Also add just the translation
+                variants.append(trans)
     
-    # Check exact match first
-    if dish_lower in dish_variants:
-        variants.extend(dish_variants[dish_lower])
+    # For compound dishes, try full translations
+    # e.g., "зеленый салат" -> "green salad", "insalata verde"
+    if len(dish_words) == 2:
+        word1, word2 = dish_words
+        if word1 in translations and word2 in translations:
+            for t1 in translations[word1]:
+                for t2 in translations[word2]:
+                    variants.append(f"{t1} {t2}")
+                    variants.append(f"{t2} {t1}")  # Italian often reverses order
     
-    # Check if dish contains any known word
-    for key, values in dish_variants.items():
-        if key in dish_lower or dish_lower in key:
-            variants.extend(values)
-        # Also check reverse (if searching for English/Italian)
-        for v in values:
-            if v in dish_lower or dish_lower in v:
-                variants.append(key)
-                variants.extend([x for x in values if x != v])
-    
-    # Remove duplicates while preserving order
+    # Deduplicate
     seen = set()
-    unique_variants = []
+    unique = []
     for v in variants:
-        if v.lower() not in seen:
-            seen.add(v.lower())
-            unique_variants.append(v)
+        v_lower = v.lower().strip()
+        if v_lower and v_lower not in seen and v_lower != dish_lower:
+            seen.add(v_lower)
+            unique.append(v_lower)
     
-    return unique_variants
+    return unique

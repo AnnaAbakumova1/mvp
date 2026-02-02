@@ -185,79 +185,94 @@ class SiteFinder:
         """
         Try to guess restaurant website URL from its name.
         
-        Common patterns:
-        - restaurantname.ru
-        - restaurantnamemsk.ru (for Moscow)
-        - restaurantnamepizza.ru (for pizzerias)
-        
-        Only works for simple brand names (single word or very short).
+        Generic patterns for Russian restaurants:
+        - brandname.ru
+        - brandnamepizza.ru (pizzerias)
+        - brandname.rest (restaurants)
+        - brandnamemsk.ru (Moscow)
         """
-        # Known restaurant URLs (for common cases)
-        known_urls = {
-            "везувио": "https://vesuviopizza.ru/",
-            "пикко": "https://picco.rest/",
-            "муу": "https://muumsk.ru/",
-        }
-        
-        name_lower = restaurant.name.lower()
-        for key, url in known_urls.items():
-            if key in name_lower:
-                try:
-                    html = await http_client.get(url, max_retries=1)
-                    if html and len(html) > 500:
-                        logger.info(f"Found known URL for {restaurant.name}: {url}")
-                        return url
-                except Exception:
-                    pass
-        
-        # Extract first significant word from name (likely the brand name)
-        name_part = restaurant.name.split(',')[0]  # Take part before comma
+        # Extract brand name (first significant word)
+        name_part = restaurant.name.split(',')[0]
         name_words = []
         for word in name_part.split():
             clean_word = ''.join(c for c in word.lower() if c.isalpha())
-            if len(clean_word) >= 2:
+            if len(clean_word) >= 3:
                 name_words.append(clean_word)
         
         if not name_words:
             return None
         
-        # Skip if name has multiple words (too generic, like "City Voice")
-        if len(name_words) > 1:
-            return None
-        
-        # Use first word as likely brand name
         brand = name_words[0]
-        
-        # Skip very short or common words
         if len(brand) < 3:
             return None
         
-        brand_translit = self._simple_translit(brand)
-        # Also try 'z' -> 's' variation
-        brand_translit_s = brand_translit.replace('z', 's')
+        # Generate all transliteration variants
+        translit_variants = self._get_translit_variants(brand)
         
-        # Try common URL patterns
-        url_patterns = [
-            f"https://{brand_translit}.ru/",
-            f"https://{brand_translit_s}.ru/",
-            f"https://{brand_translit}pizza.ru/",
-            f"https://{brand_translit_s}pizza.ru/",
-            f"https://{brand_translit}msk.ru/",
-            f"https://{brand_translit}.rest/",
+        # Common domain patterns for restaurants
+        domain_patterns = [
+            "{}.ru",
+            "{}pizza.ru",
+            "{}.rest",
+            "{}msk.ru",
+            "{}-msk.ru",
+            "{}cafe.ru",
+            "{}bar.ru",
         ]
         
-        for url in url_patterns:
-            # Quick check if site exists
-            try:
-                html = await http_client.get(url, max_retries=1)
-                if html and len(html) > 500:
-                    # Site exists and has content
-                    logger.debug(f"Guessed website exists: {url}")
-                    return url
-            except Exception:
-                continue
+        # Try each combination
+        for variant in translit_variants:
+            for pattern in domain_patterns:
+                url = f"https://{pattern.format(variant)}/"
+                try:
+                    html = await http_client.get(url, max_retries=1)
+                    if html and len(html) > 500:
+                        logger.info(f"Guessed website: {url} for {restaurant.name}")
+                        return url
+                except Exception:
+                    continue
         
         return None
+    
+    def _get_translit_variants(self, russian_word: str) -> list:
+        """
+        Generate multiple transliteration variants for a Russian word.
+        
+        Handles common variations:
+        - з → z, s (Везувио → Vezuvio, Vesuvio)
+        - и → i, y
+        - ы → y, i
+        - й → y, i, j
+        - х → h, kh
+        - ц → ts, c
+        - щ → sch, sh
+        """
+        base = self._simple_translit(russian_word)
+        
+        variants = {base}
+        
+        # Common substitution pairs (original, alternatives)
+        substitutions = [
+            ('z', ['s']),           # з → s (Italian style)
+            ('y', ['i', 'j']),      # й/ы → i/j
+            ('kh', ['h', 'x']),     # х → h/x
+            ('ts', ['c', 'tz']),    # ц → c/tz
+            ('sch', ['sh', 'shch']),# щ → sh
+            ('yo', ['e', 'io']),    # ё → e/io
+            ('yu', ['u', 'iu']),    # ю → u/iu
+            ('ya', ['a', 'ia']),    # я → a/ia
+        ]
+        
+        # Apply each substitution
+        for original, alternatives in substitutions:
+            new_variants = set()
+            for variant in variants:
+                if original in variant:
+                    for alt in alternatives:
+                        new_variants.add(variant.replace(original, alt))
+            variants.update(new_variants)
+        
+        return list(variants)
     
     def _is_valid_website(self, url: str) -> bool:
         """Check if URL is a valid restaurant website."""
@@ -296,34 +311,16 @@ class SiteFinder:
         Check if URL is likely the official restaurant website.
         
         Heuristic: domain OR path must contain at least one word from restaurant name.
-        This prevents returning unrelated sites from ads/recommendations.
+        Uses multiple transliteration variants to handle different spellings.
         """
         from urllib.parse import urlparse
         
         parsed = urlparse(url)
-        # Check both domain and path (e.g., mavlyutov-rg.ru/muu)
         url_to_check = (parsed.netloc + parsed.path).lower()
-        
-        # Known restaurant name -> URL mappings (for common cases)
-        known_mappings = {
-            "везувио": ["vesuvio", "vezuvio"],
-            "пикко": ["picco"],
-            "муу": ["muu", "muumsk"],
-            "кофемания": ["coffeemania"],
-        }
-        
-        # Check known mappings first
-        name_lower = restaurant_name.lower()
-        for ru_name, url_variants in known_mappings.items():
-            if ru_name in name_lower:
-                for variant in url_variants:
-                    if variant in url_to_check:
-                        return True
         
         # Extract significant words from restaurant name (3+ chars, letters only)
         name_words = []
         for word in restaurant_name.split():
-            # Clean word - keep only letters
             clean_word = ''.join(c for c in word.lower() if c.isalpha())
             if len(clean_word) >= 3:
                 name_words.append(clean_word)
@@ -333,16 +330,13 @@ class SiteFinder:
             # Check Russian word directly
             if word in url_to_check:
                 return True
-            # Transliterate and check (with variations)
-            word_translit = self._simple_translit(word)
-            if word_translit in url_to_check:
-                return True
-            # Try 'z' -> 's' variation (common in Italian names)
-            word_translit_s = word_translit.replace('z', 's')
-            if word_translit_s in url_to_check:
-                return True
+            
+            # Get all transliteration variants and check each
+            variants = self._get_translit_variants(word)
+            for variant in variants:
+                if variant in url_to_check:
+                    return True
         
-        # No match found - reject this URL (will trigger fallback)
         logger.debug(f"Rejecting {url} - URL doesn't match restaurant '{restaurant_name}'")
         return False
     
