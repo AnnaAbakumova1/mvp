@@ -6,6 +6,7 @@ import logging
 from typing import Optional, Dict, Any
 from collections import defaultdict
 import time
+import socket
 
 import aiohttp
 from aiohttp import ClientTimeout, ClientError
@@ -146,6 +147,11 @@ class HttpClient:
                 # Timeout - do NOT retry, site is slow/down
                 logger.warning(f"Timeout for {url} - skipping")
                 return None
+            
+            except (socket.gaierror, OSError) as e:
+                # DNS resolution failed or network error - site doesn't exist
+                logger.warning(f"DNS/Network error for {url}: {e}")
+                return None
                 
             except ClientError as e:
                 logger.error(f"Client error for {url}: {e}")
@@ -202,6 +208,10 @@ class HttpClient:
             
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout for JSON {url} - skipping")
+                return None
+            
+            except (socket.gaierror, OSError) as e:
+                logger.warning(f"DNS/Network error for {url}: {e}")
                 return None
                         
             except Exception as e:
