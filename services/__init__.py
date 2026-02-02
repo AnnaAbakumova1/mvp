@@ -7,6 +7,7 @@ from .dish_matcher import DishMatcher, dish_matcher
 from .cache import MenuCache, menu_cache
 from .pdf_parser import PDFParser, pdf_parser
 from .browser_service import BrowserService, render_js_page, close_browser
+from .image_ocr import ImageOCRService, image_ocr_service
 from .menu_parser_v2 import MenuParserV2, menu_parser_v2
 from .dish_matcher_v2 import DishMatcherV2, dish_matcher_v2
 from .task_queue import AsyncTaskQueue, task_queue, TaskPriority, TaskResult
@@ -29,6 +30,8 @@ __all__ = [
     "BrowserService",
     "render_js_page",
     "close_browser",
+    "ImageOCRService",
+    "image_ocr_service",
     "MenuParserV2",
     "menu_parser_v2",
     "DishMatcherV2",

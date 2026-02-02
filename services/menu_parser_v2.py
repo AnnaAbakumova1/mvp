@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup
 from services.cache import menu_cache
 from services.pdf_parser import pdf_parser
 from services.browser_service import BrowserService, render_js_page
+from services.image_ocr import image_ocr_service
 from utils.http_client import http_client
 from utils.text_utils import find_dish_in_text, extract_price
 
@@ -34,6 +35,7 @@ class MenuSource(Enum):
     BROWSER_RENDER = "browser_render"
     PDF_TEXT = "pdf_text"
     PDF_OCR = "pdf_ocr"
+    IMAGE_OCR = "image_ocr"
 
 
 @dataclass
@@ -299,7 +301,7 @@ class MenuParserV2:
         url: str,
         dish_name: str
     ) -> MenuParseResult:
-        """Use browser to render JS-heavy page."""
+        """Use browser to render JS-heavy page, then OCR if needed."""
         logger.info(f"[MENU_V2] Browser fallback for: {url}")
         
         result = await render_js_page(url, timeout=25000)
@@ -332,12 +334,26 @@ class MenuParserV2:
                         MenuSource.BROWSER_RENDER
                     )
             
+            # === IMAGE OCR FALLBACK ===
+            # If still not enough text, try OCR on menu images
+            logger.info(f"[MENU_V2] Trying image OCR for: {url}")
+            ocr_result = await image_ocr_service.extract_text_from_page_images(url)
+            
+            if ocr_result.success and len(ocr_result.text) >= MIN_CONTENT_LENGTH:
+                logger.info(f"[MENU_V2] Image OCR extracted {len(ocr_result.text)} chars")
+                return self._process_menu_text(
+                    ocr_result.text,
+                    url,
+                    dish_name,
+                    MenuSource.IMAGE_OCR
+                )
+            
             return MenuParseResult(
                 success=False,
                 menu_url=url,
                 menu_text=text,
                 source=MenuSource.BROWSER_RENDER,
-                error="Insufficient content after browser render"
+                error="Insufficient content after browser render and image OCR"
             )
         
         return self._process_menu_text(text, result.url, dish_name, MenuSource.BROWSER_RENDER)
