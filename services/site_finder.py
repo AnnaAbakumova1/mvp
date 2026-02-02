@@ -31,45 +31,19 @@ class SiteFinder:
     
     async def find_website(self, restaurant: Restaurant) -> Optional[str]:
         """
-        Find official website for a restaurant.
-        
-        Strategy:
-        0. Use website from 2GIS API if available
-        1. Try 2GIS web page for the restaurant
-        2. Try known URLs / guessing URL from restaurant name
-        3. If not found and Yandex search enabled, try Yandex
+        Get website for a restaurant from 2GIS API data.
         
         Args:
-            restaurant: Restaurant object with id and name
+            restaurant: Restaurant object with website from 2GIS
             
         Returns:
             Website URL or None
         """
-        # Strategy 0: Use website from 2GIS API (already in Restaurant object)
         if restaurant.website:
-            logger.info(f"Using website from 2GIS API: {restaurant.website}")
+            logger.info(f"Website from 2GIS: {restaurant.name} -> {restaurant.website}")
             return restaurant.website
         
-        # Strategy 1: 2GIS web page (parse HTML for website link)
-        website = await self._find_on_2gis(restaurant)
-        if website:
-            logger.info(f"Found website via 2GIS HTML: {website}")
-            return website
-        
-        # Strategy 2: Try guessing URL from name
-        website = await self._guess_website_url(restaurant)
-        if website:
-            logger.info(f"Found website via URL guessing: {website}")
-            return website
-        
-        # Strategy 3: Yandex search (fallback, if enabled)
-        if settings.enable_yandex_search:
-            website = await self._find_via_yandex(restaurant)
-            if website:
-                logger.info(f"Found website via Yandex: {website}")
-                return website
-        
-        logger.info(f"No website found for: {restaurant.name}")
+        logger.info(f"No website in 2GIS for: {restaurant.name}")
         return None
     
     async def _find_on_2gis(self, restaurant: Restaurant) -> Optional[str]:
