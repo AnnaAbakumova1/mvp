@@ -28,6 +28,7 @@ logging.basicConfig(
 # Reduce noise from external libraries
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 logging.getLogger("aiogram").setLevel(logging.INFO)
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)  # Suppress DNS errors from aiohttp
 
 logger = logging.getLogger(__name__)
 
