@@ -35,7 +35,7 @@ class SiteFinder:
         
         Strategy:
         1. Try 2GIS web page for the restaurant
-        2. Try guessing URL from restaurant name
+        2. Try known URLs / guessing URL from restaurant name
         3. If not found and Yandex search enabled, try Yandex
         
         Args:
@@ -50,8 +50,13 @@ class SiteFinder:
             logger.info(f"Found website via 2GIS: {website}")
             return website
         
-        # Strategy 2: Yandex search (fallback, if enabled)
-        # NOTE: _guess_website_url disabled - too slow (40s+ per restaurant with failed guesses)
+        # Strategy 2: Try known URLs / guessing (fast for known restaurants)
+        website = await self._guess_website_url(restaurant)
+        if website:
+            logger.info(f"Found website via URL guessing: {website}")
+            return website
+        
+        # Strategy 3: Yandex search (fallback, if enabled)
         if settings.enable_yandex_search:
             website = await self._find_via_yandex(restaurant)
             if website:
@@ -183,10 +188,28 @@ class SiteFinder:
         Common patterns:
         - restaurantname.ru
         - restaurantnamemsk.ru (for Moscow)
-        - restaurant-name.ru
+        - restaurantnamepizza.ru (for pizzerias)
         
         Only works for simple brand names (single word or very short).
         """
+        # Known restaurant URLs (for common cases)
+        known_urls = {
+            "везувио": "https://vesuviopizza.ru/",
+            "пикко": "https://picco.rest/",
+            "муу": "https://muumsk.ru/",
+        }
+        
+        name_lower = restaurant.name.lower()
+        for key, url in known_urls.items():
+            if key in name_lower:
+                try:
+                    html = await http_client.get(url, max_retries=1)
+                    if html and len(html) > 500:
+                        logger.info(f"Found known URL for {restaurant.name}: {url}")
+                        return url
+                except Exception:
+                    pass
+        
         # Extract first significant word from name (likely the brand name)
         name_part = restaurant.name.split(',')[0]  # Take part before comma
         name_words = []
@@ -210,13 +233,17 @@ class SiteFinder:
             return None
         
         brand_translit = self._simple_translit(brand)
+        # Also try 'z' -> 's' variation
+        brand_translit_s = brand_translit.replace('z', 's')
         
         # Try common URL patterns
         url_patterns = [
             f"https://{brand_translit}.ru/",
+            f"https://{brand_translit_s}.ru/",
+            f"https://{brand_translit}pizza.ru/",
+            f"https://{brand_translit_s}pizza.ru/",
             f"https://{brand_translit}msk.ru/",
-            f"https://{brand_translit}-msk.ru/",
-            f"https://{brand_translit}moscow.ru/",
+            f"https://{brand_translit}.rest/",
         ]
         
         for url in url_patterns:
@@ -277,6 +304,22 @@ class SiteFinder:
         # Check both domain and path (e.g., mavlyutov-rg.ru/muu)
         url_to_check = (parsed.netloc + parsed.path).lower()
         
+        # Known restaurant name -> URL mappings (for common cases)
+        known_mappings = {
+            "везувио": ["vesuvio", "vezuvio"],
+            "пикко": ["picco"],
+            "муу": ["muu", "muumsk"],
+            "кофемания": ["coffeemania"],
+        }
+        
+        # Check known mappings first
+        name_lower = restaurant_name.lower()
+        for ru_name, url_variants in known_mappings.items():
+            if ru_name in name_lower:
+                for variant in url_variants:
+                    if variant in url_to_check:
+                        return True
+        
         # Extract significant words from restaurant name (3+ chars, letters only)
         name_words = []
         for word in restaurant_name.split():
@@ -290,9 +333,13 @@ class SiteFinder:
             # Check Russian word directly
             if word in url_to_check:
                 return True
-            # Transliterate and check
+            # Transliterate and check (with variations)
             word_translit = self._simple_translit(word)
             if word_translit in url_to_check:
+                return True
+            # Try 'z' -> 's' variation (common in Italian names)
+            word_translit_s = word_translit.replace('z', 's')
+            if word_translit_s in url_to_check:
                 return True
         
         # No match found - reject this URL (will trigger fallback)
