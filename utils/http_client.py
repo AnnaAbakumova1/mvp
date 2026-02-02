@@ -131,28 +131,30 @@ class HttpClient:
                         return None
                     
                     elif response.status >= 500:
-                        # Server error - retry
+                        # Server error - retry once
                         logger.warning(f"Server error {response.status} from {domain}")
-                        await asyncio.sleep(1)
-                        continue
+                        if attempt == 0:
+                            await asyncio.sleep(1)
+                            continue
+                        return None
                     
                     else:
                         logger.warning(f"Unexpected status {response.status} from {url}")
                         return None
                         
             except asyncio.TimeoutError:
-                logger.warning(f"Timeout for {url}")
-                continue
+                # Timeout - do NOT retry, site is slow/down
+                logger.warning(f"Timeout for {url} - skipping")
+                return None
                 
             except ClientError as e:
                 logger.error(f"Client error for {url}: {e}")
-                continue
+                return None
                 
             except Exception as e:
                 logger.error(f"Unexpected error for {url}: {e}")
-                continue
+                return None
         
-        logger.error(f"All retries failed for {url}")
         return None
     
     async def get_json(
@@ -189,16 +191,22 @@ class HttpClient:
                         continue
                     
                     elif response.status >= 500:
-                        await asyncio.sleep(1)
-                        continue
+                        if attempt == 0:
+                            await asyncio.sleep(1)
+                            continue
+                        return None
                     
                     else:
                         logger.warning(f"JSON request failed with status {response.status}")
                         return None
+            
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout for JSON {url} - skipping")
+                return None
                         
             except Exception as e:
                 logger.error(f"Error fetching JSON from {url}: {e}")
-                continue
+                return None
         
         return None
     
