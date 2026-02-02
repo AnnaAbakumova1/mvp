@@ -34,6 +34,7 @@ class SiteFinder:
         Find official website for a restaurant.
         
         Strategy:
+        0. Use website from 2GIS API if available
         1. Try 2GIS web page for the restaurant
         2. Try known URLs / guessing URL from restaurant name
         3. If not found and Yandex search enabled, try Yandex
@@ -44,13 +45,18 @@ class SiteFinder:
         Returns:
             Website URL or None
         """
-        # Strategy 1: 2GIS web page (already checks name match)
+        # Strategy 0: Use website from 2GIS API (already in Restaurant object)
+        if restaurant.website:
+            logger.info(f"Using website from 2GIS API: {restaurant.website}")
+            return restaurant.website
+        
+        # Strategy 1: 2GIS web page (parse HTML for website link)
         website = await self._find_on_2gis(restaurant)
         if website:
-            logger.info(f"Found website via 2GIS: {website}")
+            logger.info(f"Found website via 2GIS HTML: {website}")
             return website
         
-        # Strategy 2: Try known URLs / guessing (fast for known restaurants)
+        # Strategy 2: Try guessing URL from name
         website = await self._guess_website_url(restaurant)
         if website:
             logger.info(f"Found website via URL guessing: {website}")
