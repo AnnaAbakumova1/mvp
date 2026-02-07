@@ -9,3 +9,26 @@ python-dotenv>=1.0.0
 
 # Agent (browser-based menu finder - fallback)
 playwright>=1.40.0
+
+# === NEW: PDF Parsing ===
+# Direct text extraction (fast, for text-based PDFs)
+PyMuPDF>=1.23.0
+
+# OCR fallback (for scanned/image PDFs)
+pdf2image>=1.16.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# Note: OCR requires tesseract-ocr installed on system:
+#   Ubuntu/Debian: apt-get install tesseract-ocr tesseract-ocr-rus
+#   macOS: brew install tesseract tesseract-lang
+#   Windows: download from https://github.com/UB-Mannheim/tesseract/wiki
+
+# Note: pdf2image requires poppler:
+#   Ubuntu/Debian: apt-get install poppler-utils
+#   macOS: brew install poppler
+#   Windows: download from https://github.com/oschwartz10612/poppler-windows/releases
+
+# === NEW: Optional Redis Cache ===
+# Uncomment if using Redis instead of SQLite cache
+# redis[hiredis]>=5.0.0

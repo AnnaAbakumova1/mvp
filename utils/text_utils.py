@@ -46,52 +46,107 @@ def normalize_for_search(text: str) -> str:
     return text
 
 
-def extract_price(text: str, dish_position: int = 0, context_chars: int = 100) -> Tuple[Optional[float], Optional[str]]:
+def extract_price(text: str, dish_position: int = 0, context_chars: int = 150) -> Tuple[Optional[float], Optional[str]]:
     """
     Extract price from text near the dish mention.
     
-    This is a best-effort extraction - not guaranteed to find the correct price.
+    Searches FORWARD from dish position (prices usually follow dish names).
     Returns (price_float, price_raw_string) or (None, None) if not found.
     
     Price patterns supported:
-    - 650 ₽
-    - 650 руб
-    - 650 р
-    - 650р.
-    - от 650 до 800
-    - 650.00
+    - 650 ₽, 650₽
+    - 650 руб, 650руб.
+    - 650 р, 650р.
+    - от 650, 650—800
+    - 150г/450₽ (weight/price)
+    - 650.00, 650,00
+    - RUB 650, 650 RUB
     """
     if not text:
         return None, None
     
-    # Get context around dish position
-    start = max(0, dish_position - context_chars)
-    end = min(len(text), dish_position + context_chars)
+    # Get context - prioritize FORWARD search (price usually after dish name)
+    start = max(0, dish_position - 30)  # Small lookback
+    end = min(len(text), dish_position + context_chars)  # Larger lookforward
     context = text[start:end]
     
-    # Price patterns (ordered by specificity)
+    # Price patterns (ordered by specificity - most specific first)
     patterns = [
-        # Price with currency symbol: 650 ₽, 650₽
+        # Price with currency symbol: 650 ₽, 650₽, 650 руб
+        (r"(\d{2,5})\s*₽", 1),
+        (r"(\d{2,5})\s*руб\.?(?:лей)?", 1),
+        (r"(\d{2,5})\s*р\.?\b", 1),
+        # RUB format: RUB 650, 650 RUB
+        (r"RUB\s*(\d{2,5})", 1),
+        (r"(\d{2,5})\s*RUB", 1),
+        # Weight/price format: 150г/450₽, 150г — 450
+        (r"\d+\s*[гgГG]\s*[/—–\-]\s*(\d{2,5})", 1),
+        # Price after separator: — 650, / 650, : 650
+        (r"[—–\-/:]\s*(\d{2,5})(?:\s*₽|\s*р\.?|\s*руб\.?)?", 1),
+        # Decimal prices: 650.00, 650,00
+        (r"(\d{2,5})[.,]00\b", 1),
+        # Price range: от 650, 650-800 (take first number)
+        (r"от\s*(\d{2,5})", 1),
+        (r"(\d{3,4})\s*[—–\-]\s*\d{3,4}", 1),
+        # Standalone number in typical price range (3-4 digits, not weight)
+        (r"(?<!\d)(\d{3,4})(?!\s*[гgГG]|\d)", 1),
+    ]
+    
+    # Try each pattern, collect all matches with positions
+    candidates = []
+    
+    for pattern, group in patterns:
+        for match in re.finditer(pattern, context, re.IGNORECASE):
+            try:
+                price = float(match.group(group))
+                # Sanity check: price should be reasonable (50 - 50000 rubles)
+                if 50 <= price <= 50000:
+                    # Calculate distance from dish position (prefer closer prices)
+                    match_pos = match.start()
+                    # Prices AFTER dish name are preferred
+                    if match_pos >= 30:  # After the lookback area
+                        distance = match_pos - 30
+                    else:
+                        distance = 1000 + (30 - match_pos)  # Penalize prices before dish
+                    
+                    candidates.append((distance, price, match.group(0).strip()))
+            except (ValueError, IndexError):
+                continue
+    
+    # Return closest price to dish position
+    if candidates:
+        candidates.sort(key=lambda x: x[0])  # Sort by distance
+        _, price, raw = candidates[0]
+        return price, raw
+    
+    return None, None
+
+
+def extract_price_from_line(line: str) -> Tuple[Optional[float], Optional[str]]:
+    """
+    Extract price from a single menu line.
+    
+    Useful when parsing structured menus where each line is a dish.
+    """
+    if not line:
+        return None, None
+    
+    # Common patterns for single-line extraction
+    patterns = [
         r"(\d{2,5})\s*₽",
-        # Price with "руб": 650 руб, 650руб.
-        r"(\d{2,5})\s*руб\.?",
-        # Price with "р": 650 р, 650р.
+        r"(\d{2,5})\s*руб",
         r"(\d{2,5})\s*р\.?\b",
-        # Price after dash/colon: — 650, : 650
-        r"[—–\-:]\s*(\d{2,5})(?:\s|$|[^\d])",
-        # Standalone number that looks like a price (3-4 digits)
-        r"\b(\d{3,4})\b",
+        r"[—–\-/]\s*(\d{2,5})\s*$",
+        r"(\d{3,4})\s*$",  # Number at end of line
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, context, re.IGNORECASE)
+        match = re.search(pattern, line, re.IGNORECASE)
         if match:
             try:
                 price = float(match.group(1))
-                # Sanity check: price should be reasonable (10 - 50000)
-                if 10 <= price <= 50000:
-                    raw = match.group(0).strip()
-                    return price, raw
+                if 50 <= price <= 50000:
+                    return price, match.group(0).strip()
             except (ValueError, IndexError):
                 continue
     
@@ -143,8 +198,9 @@ def find_dish_in_text(dish_name: str, text: str) -> Optional[int]:
     
     Tries multiple matching strategies:
     1. Exact match (normalized)
-    2. All words present
-    3. Main word present (longest word in dish name)
+    2. All words present in nearby region
+    3. Main word present
+    4. Transliterated/translated variants
     
     Returns:
         Position of match or None if not found
@@ -163,26 +219,131 @@ def find_dish_in_text(dish_name: str, text: str) -> Optional[int]:
     # Strategy 2: All significant words present in same region
     dish_words = [w for w in dish_normalized.split() if len(w) > 2]
     
-    if not dish_words:
-        return None
-    
-    # Find all occurrences of first word
-    first_word = dish_words[0]
-    for match in re.finditer(re.escape(first_word), text_normalized):
-        pos = match.start()
-        # Check if other words are nearby (within 50 chars)
-        region_start = max(0, pos - 20)
-        region_end = min(len(text_normalized), pos + 100)
-        region = text_normalized[region_start:region_end]
-        
-        if all(word in region for word in dish_words):
-            return pos
+    if dish_words:
+        # Find all occurrences of first word
+        first_word = dish_words[0]
+        for match in re.finditer(re.escape(first_word), text_normalized):
+            pos = match.start()
+            # Check if other words are nearby (within 100 chars)
+            region_start = max(0, pos - 20)
+            region_end = min(len(text_normalized), pos + 100)
+            region = text_normalized[region_start:region_end]
+            
+            if all(word in region for word in dish_words):
+                return pos
     
     # Strategy 3: Main word (longest) is present
-    main_word = max(dish_words, key=len) if dish_words else ""
-    if len(main_word) >= 4:
-        pos = text_normalized.find(main_word)
+    if dish_words:
+        main_word = max(dish_words, key=len)
+        if len(main_word) >= 4:
+            pos = text_normalized.find(main_word)
+            if pos >= 0:
+                return pos
+    
+    # Strategy 4: Try common translations/variants
+    variants = _get_dish_variants(dish_name)
+    for variant in variants:
+        variant_normalized = normalize_for_search(variant)
+        pos = text_normalized.find(variant_normalized)
         if pos >= 0:
             return pos
     
     return None
+
+
+def _get_dish_variants(dish_name: str) -> list:
+    """
+    Get alternative names/translations for a dish.
+    
+    Generic approach:
+    1. Common Russian-English translations for dish types
+    2. Word order variations (салат зеленый <-> зеленый салат)
+    3. Italian translations for Italian restaurant dishes
+    """
+    dish_lower = dish_name.lower().strip()
+    dish_words = dish_lower.split()
+    
+    variants = []
+    
+    # Word order variation (for 2-word dishes)
+    if len(dish_words) == 2:
+        variants.append(f"{dish_words[1]} {dish_words[0]}")
+    
+    # Common translations dictionary (type -> translations)
+    translations = {
+        # Dish types
+        "салат": ["salad", "insalata"],
+        "суп": ["soup", "zuppa", "brodo"],
+        "пицца": ["pizza"],
+        "паста": ["pasta"],
+        "стейк": ["steak", "bistecca"],
+        "рыба": ["fish", "pesce"],
+        "мясо": ["meat", "carne"],
+        "курица": ["chicken", "pollo"],
+        "говядина": ["beef", "manzo"],
+        "свинина": ["pork", "maiale"],
+        "десерт": ["dessert", "dolce"],
+        "напиток": ["drink", "bevanda"],
+        
+        # Adjectives
+        "зеленый": ["green", "verde"],
+        "красный": ["red", "rosso"],
+        "белый": ["white", "bianco"],
+        "куриный": ["chicken", "pollo", "di pollo"],
+        "мясной": ["meat", "carne", "di carne"],
+        "рыбный": ["fish", "pesce", "di pesce"],
+        "овощной": ["vegetable", "verdure", "di verdure"],
+        "грибной": ["mushroom", "funghi", "ai funghi"],
+        "томатный": ["tomato", "pomodoro", "al pomodoro"],
+        "сырный": ["cheese", "formaggio"],
+        "греческий": ["greek", "greco", "greca"],
+        "итальянский": ["italian", "italiano", "italiana"],
+        
+        # Specific dishes
+        "цезарь": ["caesar", "cesare"],
+        "карбонара": ["carbonara"],
+        "маргарита": ["margherita", "margarita"],
+        "пепперони": ["pepperoni", "diavola"],
+        "тирамису": ["tiramisu"],
+        "капрезе": ["caprese"],
+        "минестроне": ["minestrone"],
+        "ризотто": ["risotto"],
+        "лазанья": ["lasagna", "lasagne"],
+        "равиоли": ["ravioli"],
+        "феттучини": ["fettuccine", "fettucine"],
+        "спагетти": ["spaghetti"],
+        "пенне": ["penne"],
+        "ньокки": ["gnocchi"],
+    }
+    
+    # Generate variants by translating each word
+    for word in dish_words:
+        if word in translations:
+            for trans in translations[word]:
+                # Replace word with translation
+                new_dish = dish_lower.replace(word, trans)
+                if new_dish != dish_lower:
+                    variants.append(new_dish)
+                # Also add just the translation
+                variants.append(trans)
+    
+    # For compound dishes, try full translations
+    # e.g., "зеленый салат" -> "green salad", "insalata verde"
+    if len(dish_words) == 2:
+        word1, word2 = dish_words
+        if word1 in translations and word2 in translations:
+            for t1 in translations[word1]:
+                for t2 in translations[word2]:
+                    variants.append(f"{t1} {t2}")
+                    variants.append(f"{t2} {t1}")  # Italian often reverses order
+    
+    # Deduplicate
+    seen = set()
+    unique = []
+    for v in variants:
+        v_lower = v.lower().strip()
+        if v_lower and v_lower not in seen and v_lower != dish_lower:
+            seen.add(v_lower)
+            unique.append(v_lower)
+    
+    return unique

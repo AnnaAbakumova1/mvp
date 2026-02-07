@@ -152,7 +152,8 @@ async def process_location(message: Message, state: FSMContext):
         
         # Import services
         from services import site_finder
-        from services.menu_parser import menu_parser
+        from services.menu_parser_v2 import menu_parser_v2
+        from services.pdf_parser import pdf_parser
         from utils.text_utils import find_dish_in_text, extract_price
         
         invalid_domains = [
@@ -160,13 +161,13 @@ async def process_location(message: Message, state: FSMContext):
             "wa.me", "facebook.com", "instagram.com", "youtube.com"
         ]
         
-        # Progressive radius search: 100, 200, 300, 400, 500 meters
+        # Progressive radius search: 100, 200, 300, 400, 500, 1000 meters
         restaurants_with_dish = []  # Restaurants where dish was FOUND
         restaurants_checked = []    # All checked restaurants (to show menu links)
         checked_ids = set()         # Already processed restaurant IDs
         target_count = 3            # Stop when we find 3 restaurants with dish
-        max_radius = 500
-        radius_step = 100
+        max_radius = 1000           # Increased radius for better coverage
+        radius_step = 200           # Larger steps for faster search
         
         def format_found_restaurants(found_list, dish):
             """Format list of found restaurants for display."""
@@ -225,48 +226,36 @@ async def process_location(message: Message, state: FSMContext):
                 
                 logger.info(f"[DEBUG] Ищу блюдо на: {website}")
                 
-                # Strategy 1: Search dish directly on main page (many sites list dishes without separate menu)
-                page_text = await menu_parser.get_menu_text(website)
-                dish_position = None
-                menu_url = website  # Default to main page
+                # Use V2 parser with PDF and browser support
+                parse_result = await menu_parser_v2.find_and_parse_menu(
+                    website_url=website,
+                    dish_name=dish_name,
+                    use_browser_fallback=True,
+                    timeout=25
+                )
                 
-                if page_text:
-                    dish_position = find_dish_in_text(dish_name, page_text)
-                    if dish_position is not None:
-                        logger.info(f"[DEBUG] Блюдо найдено на главной: {restaurant.name}")
+                menu_url = parse_result.menu_url or website
+                page_text = parse_result.menu_text
+                dish_position = parse_result.dish_position if parse_result.dish_found else None
                 
-                # Strategy 2: If not found on main page, try to find dedicated menu page
-                if dish_position is None:
-                    found_menu_url = await menu_parser.find_menu_url(website, dish_name)
-                    if found_menu_url and found_menu_url != website:
-                        menu_url = found_menu_url
-                        menu_text = await menu_parser.get_menu_text(menu_url)
-                        if menu_text:
-                            dish_position = find_dish_in_text(dish_name, menu_text)
-                            page_text = menu_text  # Use menu text for price extraction
-                
-                # Strategy 3: Try Playwright if static content is very short
-                if dish_position is None and (not page_text or len(page_text) < 500):
-                    logger.info(f"[DEBUG] Мало контента, пробуем браузер: {menu_url}")
-                    page_text = await menu_parser.get_menu_text(menu_url, use_browser=True)
-                    if page_text:
-                        dish_position = find_dish_in_text(dish_name, page_text)
-                
-                # Check if this is an image-based menu (very little extractable text even after browser)
+                # Check if this is an image-based menu (very little extractable text)
                 is_image_based_menu = (not page_text or len(page_text) < 300)
                 
                 if dish_position is not None and page_text:
                     # Dish found! Add and update message immediately
-                    price, _ = extract_price(page_text, dish_position)
+                    price = parse_result.price  # Use price from V2 parser
+                    if price is None and page_text:
+                        price, _ = extract_price(page_text, dish_position)
                     
                     restaurants_with_dish.append({
                         "name": restaurant.name,
                         "website": website,
                         "dish_name": dish_name,
                         "price": price,
-                        "menu_url": menu_url
+                        "menu_url": menu_url,
+                        "source": parse_result.source.value if parse_result.source else "unknown"
                     })
-                    logger.info(f"[DEBUG] Найдено блюдо: {restaurant.name} -> {dish_name}, цена: {price}")
+                    logger.info(f"[DEBUG] Найдено блюдо: {restaurant.name} -> {dish_name}, цена: {price}, источник: {parse_result.source}")
                     
                     # Update message immediately with new result
                     if len(restaurants_with_dish) < target_count:

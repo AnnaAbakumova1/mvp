@@ -108,8 +108,8 @@ class GeoService:
                 "point": f"{lon},{lat}",
                 "radius": radius,
                 "rubric_id": rubric_id,
-                "fields": "items.point,items.address",
-                "page_size": min(10, max_results - len(restaurants)),  # Максимум 10 по требованиям API
+                "fields": "items.point,items.address,items.contact_groups,items.external_content",
+                "page_size": min(10, max_results - len(restaurants)),
             }
             
             logger.info(f"[DEBUG] Запрос к 2GIS: rubric={rubric_id}, point={params['point']}, radius={radius}")
@@ -149,13 +149,39 @@ class GeoService:
                 
                 address = ", ".join(filter(None, address_parts)) or item.get("address_name", "")
                 
+                # Extract website from 2GIS data
+                website = None
+                
+                # Try external_content first (usually has website)
+                external = item.get("external_content", [])
+                for ext in external:
+                    if ext.get("type") == "website":
+                        website = ext.get("value")
+                        break
+                
+                # Try contact_groups if no website yet
+                if not website:
+                    contact_groups = item.get("contact_groups", [])
+                    for group in contact_groups:
+                        contacts = group.get("contacts", [])
+                        for contact in contacts:
+                            if contact.get("type") == "website":
+                                website = contact.get("value")
+                                break
+                        if website:
+                            break
+                
+                # Normalize website URL
+                if website and not website.startswith("http"):
+                    website = f"https://{website}"
+                
                 restaurant = Restaurant(
                     id=item_id,
                     name=item.get("name", "Без названия"),
                     address=address,
                     lat=point.get("lat", lat),
                     lon=point.get("lon", lon),
-                    website=None,  # 2GIS API doesn't provide website
+                    website=website,
                 )
                 
                 restaurants.append(restaurant)
